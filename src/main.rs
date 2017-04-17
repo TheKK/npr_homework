@@ -296,7 +296,7 @@ impl App {
         target.finish().unwrap();
     }
 
-    fn draw_texture_on(&self, tex: &Texture2d, target: &mut glium::Frame) {
+    fn draw_texture_on<S: Surface>(&self, tex: &Texture2d, target: &mut S) {
         let draw_state =
             glium::DrawParameters { blend: Blend::alpha_blending(), ..Default::default() };
         target.draw(&self.final_vertex_buffer,
@@ -414,33 +414,25 @@ impl App {
 
     fn render_circle(&self,
                      target_tex: &Texture2d,
-                     previous_tex: &Texture2d,
                      center: [f32; 2],
                      radius: f32,
-                     color: &[f32; 4]) {
+                     brush_color: &[f32; 4]) {
         target_tex.as_surface()
             .draw(&self.final_vertex_buffer,
                   &NoIndices(PrimitiveType::TriangleStrip),
                   &self.circle_program,
                   &uniform!{
-                      previous_tex: previous_tex,
                       center: center,
                       radius: radius,
-                      brush_color: *color,
+                      brush_color: *brush_color,
                   },
                   &DrawParameters::default())
             .expect("failed to draw triangle list");
-
-        // Copy to tmp texture for future reference
-        target_tex.as_surface()
-            .fill(&previous_tex.as_surface(),
-                  glium::uniforms::MagnifySamplerFilter::Nearest);
     }
 
     fn render_triangle_lists_on(&self,
                                 triangles: &[Vertex],
                                 target_tex: &Texture2d,
-                                previous_tex: &Texture2d,
                                 brush_color: &[f32; 4]) {
         let Size { width, height } = self.window.draw_size();
 
@@ -459,37 +451,55 @@ impl App {
                   &NoIndices(PrimitiveType::TriangleStrip),
                   &self.triangle_program,
                   &uniform!{
-                      previous_tex: previous_tex,
                       brush_color: *brush_color,
                   },
                   &DrawParameters::default())
             .expect("failed to draw triangle list");
+    }
 
-        // Copy to tmp texture for future reference
-        target_tex.as_surface()
-            .fill(&previous_tex.as_surface(),
-                  glium::uniforms::MagnifySamplerFilter::Nearest);
+    fn caculate_anchor_polygon(&self,
+                               prev_stroke_anchor: &StrokeAnchor,
+                               stroke_anchor: &StrokeAnchor)
+                               -> [Vertex; 4] {
+        let prev_anchor_pos = &prev_stroke_anchor.pos;
+        let anchor_pos = &stroke_anchor.pos;
+
+        let start_pos = math::cast([prev_anchor_pos[0], prev_anchor_pos[1]]);
+        let end_pos = math::cast([anchor_pos[0], anchor_pos[1]]);
+
+        let norm_v = vecmath::vec2_normalized([(anchor_pos[0] - prev_anchor_pos[0]) as f32,
+                                               (anchor_pos[1] - prev_anchor_pos[1]) as f32]);
+
+        let start_brush_width = self.caculate_brush_radius(prev_stroke_anchor.pressure);
+        let end_brush_width = self.caculate_brush_radius(stroke_anchor.pressure);
+
+        let start_v = math::mul_scalar(norm_v, start_brush_width);
+        let end_v = math::mul_scalar(norm_v, end_brush_width);
+
+        let rotate_right = math::rotate_radians(std::f32::consts::PI / 2.);
+        let rotate_left = math::rotate_radians(std::f32::consts::PI / -2.);
+
+        let start_a_mat = math::translate(math::transform_vec(rotate_left, start_v));
+        let start_b_mat = math::translate(math::transform_vec(rotate_right, start_v));
+        let end_a_mat = math::translate(math::transform_vec(rotate_left, end_v));
+        let end_b_mat = math::translate(math::transform_vec(rotate_right, end_v));
+
+        [Vertex { pos: math::transform_pos(start_a_mat, start_pos) },
+         Vertex { pos: math::transform_pos(end_a_mat, end_pos) },
+         Vertex { pos: math::transform_pos(start_b_mat, start_pos) },
+         Vertex { pos: math::transform_pos(end_b_mat, end_pos) }]
     }
 
     fn render_stroke_ink_outline_tex(&self) {
         self.stroke_outline_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
 
-        // Render circle part at each anchor.
-        for stroke in &self.states.stroke_records {
-            for stroke_anchor in stroke.anchors.iter() {
-                let radius = self.caculate_brush_radius(stroke_anchor.pressure);
-
-                let stroke_color = match self.states.render_mode {
-                    RenderMode::Colored => stroke.color,
-                    _ => [1.0, 0.0, 0.0, 1.0],
-                };
-                self.render_circle(&self.stroke_outline_tex,
-                                   &self.stroke_outline_tmp_tex,
-                                   stroke_anchor.pos,
-                                   radius,
-                                   &stroke_color);
-            }
-        }
+        let render_circle_part = |stroke_anchor: &StrokeAnchor, stroke_color| {
+            let radius = self.caculate_brush_radius(stroke_anchor.pressure);
+            self.render_circle(&self.stroke_outline_tmp_tex,
+                               [stroke_anchor.pos[0], stroke_anchor.pos[1]],
+                               radius,
+                               &stroke_color);
+        };
 
         // Render polygon part between each anchor.
         for stroke in &self.states.stroke_records {
@@ -497,55 +507,39 @@ impl App {
                 continue;
             }
 
-            let mut stroke_anchors_iter = stroke.anchors.iter();
+            // Texture used for storing new stroke.
+            self.stroke_outline_tmp_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
 
+            let mut stroke_anchors_iter = stroke.anchors.iter();
             let mut prev_stroke_anchor = stroke_anchors_iter.next().unwrap();
 
+            let stroke_color = match self.states.render_mode {
+                RenderMode::Colored => stroke.color,
+                _ => [1.0, 0.0, 0.0, 1.0],
+            };
+
+            // Draw circle of start anchor.
+            render_circle_part(prev_stroke_anchor, stroke_color);
+
+            // Draw outline form by all anchor.
             for stroke_anchor in stroke_anchors_iter {
+                let polygon_points =
+                    self.caculate_anchor_polygon(prev_stroke_anchor, stroke_anchor);
 
-                let prev_anchor_pos = &prev_stroke_anchor.pos;
-                let anchor_pos = &stroke_anchor.pos;
-
-                let start_pos = math::cast([prev_anchor_pos[0], prev_anchor_pos[1]]);
-                let end_pos = math::cast([anchor_pos[0], anchor_pos[1]]);
-
-                let norm_v =
-                    vecmath::vec2_normalized([(anchor_pos[0] - prev_anchor_pos[0]) as f32,
-                                              (anchor_pos[1] - prev_anchor_pos[1]) as f32]);
-
-                let start_brush_width = self.caculate_brush_radius(prev_stroke_anchor.pressure);
-                let end_brush_width = self.caculate_brush_radius(stroke_anchor.pressure);
-
-                let start_v = math::mul_scalar(norm_v, start_brush_width);
-                let end_v = math::mul_scalar(norm_v, end_brush_width);
-
-                let rotate_right = math::rotate_radians(std::f32::consts::PI / 2.);
-                let rotate_left = math::rotate_radians(std::f32::consts::PI / -2.);
-
-                let start_a_mat = math::translate(math::transform_vec(rotate_left, start_v));
-                let start_b_mat = math::translate(math::transform_vec(rotate_right, start_v));
-                let end_a_mat = math::translate(math::transform_vec(rotate_left, end_v));
-                let end_b_mat = math::translate(math::transform_vec(rotate_right, end_v));
-
-                let polygon_points = [Vertex { pos: math::transform_pos(start_a_mat, start_pos) },
-                                      Vertex { pos: math::transform_pos(end_a_mat, end_pos) },
-                                      Vertex { pos: math::transform_pos(start_b_mat, start_pos) },
-                                      Vertex { pos: math::transform_pos(end_b_mat, end_pos) }];
-
-                let stroke_color = match self.states.render_mode {
-                    RenderMode::Colored => stroke.color,
-                    _ => [1.0, 0.0, 0.0, 1.0],
-                };
-
+                render_circle_part(stroke_anchor, stroke_color);
                 self.render_triangle_lists_on(&polygon_points,
-                                              &self.stroke_outline_tex,
                                               &self.stroke_outline_tmp_tex,
                                               &stroke_color);
 
                 prev_stroke_anchor = &stroke_anchor;
             }
+
+            // Blit new stroke onto previous canvas.
+            self.draw_texture_on(&self.stroke_outline_tmp_tex,
+                                 &mut self.stroke_outline_tex.as_surface());
         }
     }
+
     fn render_stroke_ink_quantity_tex(&self) {
         let draw = |start_pos: [f32; 2],
                     start_radius,
