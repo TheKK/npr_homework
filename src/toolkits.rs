@@ -11,6 +11,7 @@ use imgui::glium_renderer::{Renderer, RendererResult};
 use imgui::*;
 
 use states::States;
+use states::RenderMode;
 
 mod gui {
     use super::*;
@@ -27,6 +28,9 @@ mod gui {
         }
         if ui.collapsing_header(im_str!("View")).build() {
             build_view_panel(ui, states);
+        }
+        if ui.collapsing_header(im_str!("Brush")).build() {
+            build_brush_panel(ui, states);
         }
 
         build_stroke_manipulation_panel(ui, states);
@@ -59,15 +63,39 @@ mod gui {
     }
 
     fn build_view_panel(ui: &Ui, states: &mut States) {
+        {
+            let mut render_mode_i32 = states.render_mode as i32;
+
+            if ui.combo(im_str!("render mode"),
+                        &mut render_mode_i32,
+                        &[im_str!("black & white"), im_str!("colored")],
+                        10) {
+
+                states.need_update_brush_preview = true;
+            }
+
+            match render_mode_i32 {
+                0 => states.render_mode = RenderMode::BlackAndWhite,
+                1 => states.render_mode = RenderMode::Colored,
+                _ => panic!("should not happen"),
+            }
+        }
+
         ui.checkbox(im_str!("show anchors"), &mut states.show_anchors);
         ui.checkbox(im_str!("show lines"), &mut states.show_stroke_lines);
 
-        ui.checkbox(im_str!("show brush preview"),
-                    &mut states.show_brush_preview);
-        ui.checkbox(im_str!("show ink outline preview"),
-                    &mut states.show_stroke_outline_preview);
-        ui.checkbox(im_str!("show ink quantity preview"),
-                    &mut states.show_ink_quantity_preview);
+        let need_update = &mut states.need_update_brush_preview;
+        *need_update |= ui.checkbox(im_str!("show brush preview"),
+                                    &mut states.show_brush_preview);
+        *need_update |= ui.checkbox(im_str!("show ink outline preview"),
+                                    &mut states.show_stroke_outline_preview);
+        *need_update |= ui.checkbox(im_str!("show ink quantity preview"),
+                                    &mut states.show_ink_quantity_preview);
+    }
+
+
+    fn build_brush_panel(ui: &Ui, states: &mut States) {
+        ui.color_edit4(im_str!("color"), &mut states.recording_stroke_anchors.color).build();
     }
 
     fn build_stroke_manipulation_panel(ui: &Ui, states: &mut States) {
@@ -79,8 +107,9 @@ mod gui {
                     ui.text(im_str!("Stroke no.{}", stroke_index));
                     ui.separator();
 
-                    for (index, anchor) in stroke.iter_mut().enumerate() {
-                        ui.slider_float(im_str!("{}-{}", stroke_index, index),
+                    let need_update = &mut states.need_update_brush_preview;
+                    for (index, anchor) in stroke.anchors.iter_mut().enumerate() {
+                        *need_update |= ui.slider_float(im_str!("{}-{}", stroke_index, index),
                                           &mut anchor.pressure,
                                           0.0,
                                           1.0)
@@ -99,37 +128,38 @@ mod gui {
             println!("jkflkfsdj");
         }
 
-        ui.slider_float(im_str!("stroke line radius"),
+        let need_update = &mut states.need_update_brush_preview;
+        *need_update |= ui.slider_float(im_str!("stroke line radius"),
                           &mut states.stroke_line_radius,
                           0.1,
                           1.0)
             .build();
 
-        ui.slider_float(im_str!("max brush width"),
+        *need_update |= ui.slider_float(im_str!("max brush width"),
                           &mut states.max_brush_width,
                           1.0,
                           50.0)
             .build();
 
-        ui.slider_float(im_str!("initial ink quantity"),
+        *need_update |= ui.slider_float(im_str!("initial ink quantity"),
                           &mut states.initial_ink_quantity,
                           0.0,
                           100.0)
             .build();
 
-        ui.slider_float(im_str!("ink quantity friction"),
+        *need_update |= ui.slider_float(im_str!("ink quantity friction"),
                           &mut states.ink_quantity_friction,
                           0.001,
                           0.01)
             .build();
 
-        ui.slider_float(im_str!("stroke speed factor"),
+        *need_update |= ui.slider_float(im_str!("stroke speed factor"),
                           &mut states.stroke_speed_factor,
                           0.1,
                           5.0)
             .build();
 
-        ui.slider_float(im_str!("stroke interpolation accuracy"),
+        *need_update |= ui.slider_float(im_str!("stroke interpolation accuracy"),
                           &mut states.stroke_interpolation_accuracy,
                           1.,
                           50.)

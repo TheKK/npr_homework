@@ -34,6 +34,7 @@ use piston::window::WindowSettings;
 use glium::Program;
 
 use states::StrokeAnchor;
+use states::RenderMode;
 
 const OPENGL: OpenGL = OpenGL::V3_2;
 
@@ -87,14 +88,22 @@ struct App {
 
     brush_preview_tex: Texture2d,
     stroke_outline_tex: Texture2d,
+    stroke_outline_tmp_tex: Texture2d,
     stroke_ink_quantity_tex: Texture2d,
     stroke_ink_quantity_tmp_tex: Texture2d,
+
+    // Watercolor textures.
+    shallow_water_tex: Texture2d,
+    pidment_deposition_tex: Texture2d,
+    capillary_tex: Texture2d,
+    passive_layer_tex: Texture2d,
 
     final_program: Program,
     stroke_ink_quantity_program: Program,
     circle_program: Program,
     triangle_program: Program,
-    brush_program: Program,
+    black_n_white_brush_program: Program,
+    watercolor_brush_program: Program,
 
     rust_logo: Texture,
     doge_image: Texture2d,
@@ -137,14 +146,6 @@ impl App {
                                                              }])
             .unwrap();
 
-        let brush_preview_tex = glium::texture::texture2d::Texture2d::empty(&window, w, h).unwrap();
-        let stroke_outline_tex = glium::texture::texture2d::Texture2d::empty(&window, w, h)
-            .unwrap();
-        let stroke_ink_quantity_tex = glium::texture::texture2d::Texture2d::empty(&window, w, h)
-            .unwrap();
-        let stroke_ink_quantity_tmp_tex =
-            glium::texture::texture2d::Texture2d::empty(&window, w, h).unwrap();
-
         let rust_logo = Texture::from_path(&mut window,
                                            "assets/rust.png",
                                            Flip::None,
@@ -173,10 +174,17 @@ impl App {
                                                                &load_string("shaders/ink.fs"),
                                                                None)
             .expect("failed to initialize textured shader");
-        let brush_program = Program::from_source(&window,
-                                                 &load_string("shaders/final.vs"),
-                                                 &load_string("shaders/brush.fs"),
-                                                 None)
+        let black_n_white_brush_program =
+            Program::from_source(&window,
+                                 &load_string("shaders/final.vs"),
+                                 &load_string("shaders/black_n_white_brush.fs"),
+                                 None)
+                .expect("failed to initialize textured shader");
+        let watercolor_brush_program = Program::from_source(&window,
+                                                            &load_string("shaders/final.vs"),
+                                                            &load_string("shaders/watercolor_brush.\
+                                                                          fs"),
+                                                            None)
             .expect("failed to initialize textured shader");
 
         let doge_image = load_texture(&window, include_bytes!("assets/doge.png"));
@@ -188,17 +196,20 @@ impl App {
         let level4_tex = load_texture(&window, include_bytes!("assets/level4.png"));
 
         App {
-            window: window,
-            toolkits: toolkits,
-            states: states::States::default(),
-
             final_vertex_buffer: final_vertex_buffer,
 
-            brush_preview_tex: brush_preview_tex,
-            stroke_outline_tex: stroke_outline_tex,
-            stroke_ink_quantity_tex: stroke_ink_quantity_tex,
-            stroke_ink_quantity_tmp_tex: stroke_ink_quantity_tmp_tex,
-            brush_program: brush_program,
+            brush_preview_tex: Texture2d::empty(&window, w, h).unwrap(),
+            stroke_outline_tex: Texture2d::empty(&window, w, h).unwrap(),
+            stroke_outline_tmp_tex: Texture2d::empty(&window, w, h).unwrap(),
+            stroke_ink_quantity_tex: Texture2d::empty(&window, w, h).unwrap(),
+            stroke_ink_quantity_tmp_tex: Texture2d::empty(&window, w, h).unwrap(),
+            black_n_white_brush_program: black_n_white_brush_program,
+            watercolor_brush_program: watercolor_brush_program,
+
+            shallow_water_tex: Texture2d::empty(&window, w, h).unwrap(),
+            pidment_deposition_tex: Texture2d::empty(&window, w, h).unwrap(),
+            capillary_tex: Texture2d::empty(&window, w, h).unwrap(),
+            passive_layer_tex: Texture2d::empty(&window, w, h).unwrap(),
 
             final_program: final_program,
             stroke_ink_quantity_program: stroke_ink_quantity_program,
@@ -213,6 +224,10 @@ impl App {
             level2_tex: level2_tex,
             level3_tex: level3_tex,
             level4_tex: level4_tex,
+
+            window: window,
+            toolkits: toolkits,
+            states: states::States::default(),
         }
     }
 
@@ -250,13 +265,13 @@ impl App {
                  args.viewport(),
                  |_c, g| { clear(color::WHITE, g); });
 
+        if self.states.need_update_brush_preview {
+            self.states.need_update_brush_preview = false;
+
+            self.construct_brush_tex();
+        }
+
         if self.states.show_brush_preview {
-            if self.states.need_update_brush_preview {
-                self.states.need_update_brush_preview = false;
-
-                self.construct_brush_tex();
-            }
-
             self.draw_texture_on(&self.brush_preview_tex, &mut target);
         }
 
@@ -307,6 +322,7 @@ impl App {
                     _ => {}
                 }
             }
+
             &Input::Release(Button::Mouse(button)) => {
                 match button {
                     MouseButton::Right => {
@@ -330,7 +346,7 @@ impl App {
                         states.current_recording_cooldown -= states.max_recording_cooldown;
 
                         let new_stroke_anchor = StrokeAnchor::new(&[x as f32, y as f32], 1.);
-                        states.recording_stroke_anchors.push(new_stroke_anchor);
+                        states.recording_stroke_anchors.add_anchor(new_stroke_anchor);
                     }
                 }
             }
@@ -357,7 +373,7 @@ impl App {
         use graphics::ellipse::circle;
 
         let mut draw_one_stroke = |one_stroke: &states::OneStroke| {
-            let mut stroke_records_iter = one_stroke.iter();
+            let mut stroke_records_iter = one_stroke.anchors.iter();
 
             if let Some(mut prev_stroke_anchor) = stroke_records_iter.next() {
                 for stroke_anchor in stroke_records_iter {
@@ -396,20 +412,36 @@ impl App {
         draw_one_stroke(&self.states.recording_stroke_anchors);
     }
 
-    fn render_circle(&self, tex: &glium::Texture2d, center: [f32; 2], radius: f32) {
-        tex.as_surface()
+    fn render_circle(&self,
+                     target_tex: &Texture2d,
+                     previous_tex: &Texture2d,
+                     center: [f32; 2],
+                     radius: f32,
+                     color: &[f32; 4]) {
+        target_tex.as_surface()
             .draw(&self.final_vertex_buffer,
                   &NoIndices(PrimitiveType::TriangleStrip),
                   &self.circle_program,
                   &uniform!{
+                      previous_tex: previous_tex,
                       center: center,
                       radius: radius,
+                      brush_color: *color,
                   },
                   &DrawParameters::default())
             .expect("failed to draw triangle list");
+
+        // Copy to tmp texture for future reference
+        target_tex.as_surface()
+            .fill(&previous_tex.as_surface(),
+                  glium::uniforms::MagnifySamplerFilter::Nearest);
     }
 
-    fn render_triangle_lists_on(&self, triangles: &[Vertex], tex: &glium::Texture2d) {
+    fn render_triangle_lists_on(&self,
+                                triangles: &[Vertex],
+                                target_tex: &Texture2d,
+                                previous_tex: &Texture2d,
+                                brush_color: &[f32; 4]) {
         let Size { width, height } = self.window.draw_size();
 
         let triangles: Vec<_> = triangles.iter()
@@ -422,66 +454,95 @@ impl App {
             .collect();
 
         let vertex_buffer = glium::VertexBuffer::new(&self.window, &triangles).unwrap();
-        tex.as_surface()
+        target_tex.as_surface()
             .draw(&vertex_buffer,
                   &NoIndices(PrimitiveType::TriangleStrip),
                   &self.triangle_program,
-                  &uniform!{},
+                  &uniform!{
+                      previous_tex: previous_tex,
+                      brush_color: *brush_color,
+                  },
                   &DrawParameters::default())
             .expect("failed to draw triangle list");
+
+        // Copy to tmp texture for future reference
+        target_tex.as_surface()
+            .fill(&previous_tex.as_surface(),
+                  glium::uniforms::MagnifySamplerFilter::Nearest);
     }
 
     fn render_stroke_ink_outline_tex(&self) {
         self.stroke_outline_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
 
+        // Render circle part at each anchor.
         for stroke in &self.states.stroke_records {
-            for stroke_anchor in stroke {
+            for stroke_anchor in stroke.anchors.iter() {
                 let radius = self.caculate_brush_radius(stroke_anchor.pressure);
-                self.render_circle(&self.stroke_outline_tex, stroke_anchor.pos, radius);
+
+                let stroke_color = match self.states.render_mode {
+                    RenderMode::Colored => stroke.color,
+                    _ => [1.0, 0.0, 0.0, 1.0],
+                };
+                self.render_circle(&self.stroke_outline_tex,
+                                   &self.stroke_outline_tmp_tex,
+                                   stroke_anchor.pos,
+                                   radius,
+                                   &stroke_color);
             }
         }
 
+        // Render polygon part between each anchor.
         for stroke in &self.states.stroke_records {
-            let mut stroke_iter = stroke.iter();
+            if stroke.anchors.is_empty() {
+                continue;
+            }
 
-            if let Some(mut prev_stroke_anchor) = stroke_iter.next() {
+            let mut stroke_anchors_iter = stroke.anchors.iter();
 
-                for stroke_anchor in stroke_iter {
+            let mut prev_stroke_anchor = stroke_anchors_iter.next().unwrap();
 
-                    let prev_anchor_pos = &prev_stroke_anchor.pos;
-                    let anchor_pos = &stroke_anchor.pos;
+            for stroke_anchor in stroke_anchors_iter {
 
-                    let start_pos = math::cast([prev_anchor_pos[0], prev_anchor_pos[1]]);
-                    let end_pos = math::cast([anchor_pos[0], anchor_pos[1]]);
+                let prev_anchor_pos = &prev_stroke_anchor.pos;
+                let anchor_pos = &stroke_anchor.pos;
 
-                    let norm_v =
-                        vecmath::vec2_normalized([(anchor_pos[0] - prev_anchor_pos[0]) as f32,
-                                                  (anchor_pos[1] - prev_anchor_pos[1]) as f32]);
+                let start_pos = math::cast([prev_anchor_pos[0], prev_anchor_pos[1]]);
+                let end_pos = math::cast([anchor_pos[0], anchor_pos[1]]);
 
-                    let start_brush_width = self.caculate_brush_radius(prev_stroke_anchor.pressure);
-                    let end_brush_width = self.caculate_brush_radius(stroke_anchor.pressure);
+                let norm_v =
+                    vecmath::vec2_normalized([(anchor_pos[0] - prev_anchor_pos[0]) as f32,
+                                              (anchor_pos[1] - prev_anchor_pos[1]) as f32]);
 
-                    let start_v = math::mul_scalar(norm_v, start_brush_width);
-                    let end_v = math::mul_scalar(norm_v, end_brush_width);
+                let start_brush_width = self.caculate_brush_radius(prev_stroke_anchor.pressure);
+                let end_brush_width = self.caculate_brush_radius(stroke_anchor.pressure);
 
-                    let rotate_right = math::rotate_radians(std::f32::consts::PI / 2.);
-                    let rotate_left = math::rotate_radians(std::f32::consts::PI / -2.);
+                let start_v = math::mul_scalar(norm_v, start_brush_width);
+                let end_v = math::mul_scalar(norm_v, end_brush_width);
 
-                    let start_a_mat = math::translate(math::transform_vec(rotate_left, start_v));
-                    let start_b_mat = math::translate(math::transform_vec(rotate_right, start_v));
-                    let end_a_mat = math::translate(math::transform_vec(rotate_left, end_v));
-                    let end_b_mat = math::translate(math::transform_vec(rotate_right, end_v));
+                let rotate_right = math::rotate_radians(std::f32::consts::PI / 2.);
+                let rotate_left = math::rotate_radians(std::f32::consts::PI / -2.);
 
-                    let polygon_points =
-                        [Vertex { pos: math::transform_pos(start_a_mat, start_pos) },
-                         Vertex { pos: math::transform_pos(end_a_mat, end_pos) },
-                         Vertex { pos: math::transform_pos(start_b_mat, start_pos) },
-                         Vertex { pos: math::transform_pos(end_b_mat, end_pos) }];
+                let start_a_mat = math::translate(math::transform_vec(rotate_left, start_v));
+                let start_b_mat = math::translate(math::transform_vec(rotate_right, start_v));
+                let end_a_mat = math::translate(math::transform_vec(rotate_left, end_v));
+                let end_b_mat = math::translate(math::transform_vec(rotate_right, end_v));
 
-                    self.render_triangle_lists_on(&polygon_points, &self.stroke_outline_tex);
+                let polygon_points = [Vertex { pos: math::transform_pos(start_a_mat, start_pos) },
+                                      Vertex { pos: math::transform_pos(end_a_mat, end_pos) },
+                                      Vertex { pos: math::transform_pos(start_b_mat, start_pos) },
+                                      Vertex { pos: math::transform_pos(end_b_mat, end_pos) }];
 
-                    prev_stroke_anchor = &stroke_anchor;
-                }
+                let stroke_color = match self.states.render_mode {
+                    RenderMode::Colored => stroke.color,
+                    _ => [1.0, 0.0, 0.0, 1.0],
+                };
+
+                self.render_triangle_lists_on(&polygon_points,
+                                              &self.stroke_outline_tex,
+                                              &self.stroke_outline_tmp_tex,
+                                              &stroke_color);
+
+                prev_stroke_anchor = &stroke_anchor;
             }
         }
     }
@@ -525,7 +586,7 @@ impl App {
         self.stroke_ink_quantity_tmp_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
 
         for stroke in &self.states.stroke_records {
-            let mut stroke_iter = stroke.iter();
+            let mut stroke_iter = stroke.anchors.iter();
             let mut current_ink_quantity = self.states.initial_ink_quantity;
 
             if let Some(mut prev_stroke_anchor) = stroke_iter.next() {
@@ -558,6 +619,7 @@ impl App {
             }
         }
     }
+
     fn render_brush_tex(&self) {
         use glium::uniforms::Sampler;
 
@@ -574,7 +636,7 @@ impl App {
             .as_surface()
             .draw(&self.final_vertex_buffer,
                   &NoIndices(PrimitiveType::TriangleStrip),
-                  &self.brush_program,
+                  &self.black_n_white_brush_program,
                   &uniform!{
                       stroke_ink_quantity_tex: &self.stroke_ink_quantity_tex,
 
@@ -588,10 +650,36 @@ impl App {
             .expect("failed to draw triangle list");
     }
 
+    fn render_watercolor_brush_tex(&self) {
+        self.brush_preview_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
+
+        self.brush_preview_tex
+            .as_surface()
+            .draw(&self.final_vertex_buffer,
+                  &NoIndices(PrimitiveType::TriangleStrip),
+                  &self.watercolor_brush_program,
+                  &uniform!{
+                      stroke_outline_tex: &self.stroke_outline_tex,
+                      stroke_ink_quantity_tex: &self.stroke_ink_quantity_tex,
+                  },
+                  &DrawParameters::default())
+            .expect("failed to draw triangle list");
+    }
+
     fn construct_brush_tex(&self) {
-        self.render_stroke_ink_outline_tex();
-        self.render_stroke_ink_quantity_tex();
-        self.render_brush_tex();
+        // TODO Use struct to wrap these up.
+        match self.states.render_mode {
+            RenderMode::BlackAndWhite => {
+                self.render_stroke_ink_outline_tex();
+                self.render_stroke_ink_quantity_tex();
+                self.render_brush_tex();
+            }
+            RenderMode::Colored => {
+                self.render_stroke_ink_outline_tex();
+                self.render_stroke_ink_quantity_tex();
+                self.render_watercolor_brush_tex();
+            }
+        }
     }
 
     fn caculate_brush_radius(&self, pressure: f32) -> f32 {

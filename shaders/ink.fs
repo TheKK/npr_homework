@@ -77,8 +77,8 @@ bool is_in_area_b(vec2 pos,
 }
 
 void main() {
-    bool not_in_stroke_outline = texture(stroke_outline_tex, v_tex_coords).x == 0.0;
-    bool already_painted = texture(stroke_ink_quantity_tmp_tex, v_tex_coords).a == 1;
+    bool not_in_stroke_outline = texture(stroke_outline_tex, v_tex_coords).a > 0;
+    bool already_painted = texture(stroke_ink_quantity_tmp_tex, v_tex_coords).a > 0;
     if (not_in_stroke_outline || already_painted) {
         discard;
     }

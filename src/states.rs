@@ -19,9 +19,31 @@ impl StrokeAnchor {
     }
 }
 
-pub type OneStroke = Vec<StrokeAnchor>;
+#[derive(Clone)]
+pub struct OneStroke {
+    pub color: [f32; 4],
+    pub anchors: Vec<StrokeAnchor>,
+}
+
+impl OneStroke {
+    pub fn clear(&mut self) {
+        self.anchors.clear();
+    }
+
+    pub fn add_anchor(&mut self, new_anchor: StrokeAnchor) {
+        self.anchors.push(new_anchor);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum RenderMode {
+    BlackAndWhite,
+    Colored,
+}
 
 pub struct States {
+    pub render_mode: RenderMode,
+
     pub is_recording_trajectory: bool,
     pub current_recording_cooldown: f32,
     pub max_recording_cooldown: f32,
@@ -51,6 +73,8 @@ pub struct States {
 impl Default for States {
     fn default() -> Self {
         States {
+            render_mode: RenderMode::BlackAndWhite,
+
             is_recording_trajectory: false,
             current_recording_cooldown: 0.,
             max_recording_cooldown: 0.033,
@@ -64,7 +88,10 @@ impl Default for States {
             stroke_interpolation_accuracy: 10.,
             stroke_speed_factor: 2.0,
 
-            recording_stroke_anchors: Vec::new(),
+            recording_stroke_anchors: OneStroke {
+                color: [0.0; 4],
+                anchors: Vec::new(),
+            },
             stroke_records: Vec::new(),
 
             show_anchors: true,
