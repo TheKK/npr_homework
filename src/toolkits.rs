@@ -50,10 +50,12 @@ mod gui {
 
     fn build_edit_panel(ui: &Ui, states: &mut States) {
         if ui.button(im_str!("clear all"), ImVec2::new(0., 0.)) {
+            states.need_update_brush_preview = true;
             states.stroke_records.clear();
         }
 
         if ui.button(im_str!("clear last"), ImVec2::new(0., 0.)) {
+            states.need_update_brush_preview = true;
             states.stroke_records.pop();
         }
 
@@ -120,13 +122,11 @@ mod gui {
     }
 
     fn build_parameters_control_panel(ui: &Ui, states: &mut States) {
-        if ui.slider_float(im_str!("poke interval"),
+        ui.slider_float(im_str!("poke interval"),
                           &mut states.max_recording_cooldown,
                           0.033,
                           1.0)
-            .build() {
-            println!("jkflkfsdj");
-        }
+            .build();
 
         let need_update = &mut states.need_update_brush_preview;
         *need_update |= ui.slider_float(im_str!("stroke line radius"),
