@@ -1,14 +1,16 @@
 use std::default::Default;
 use std::time::Instant;
 
-use glium;
-use piston::input::{Input, Button, Motion};
-use piston::input::keyboard::Key;
-use piston::input::mouse::MouseButton;
 use glium::Surface;
 use glium::backend::Facade;
-use imgui::glium_renderer::{Renderer, RendererResult};
+use glium;
 use imgui::*;
+use imgui::glium_renderer::{Renderer, RendererResult};
+use piston::input::keyboard::Key;
+use piston::input::mouse::MouseButton;
+use piston::input::{Input, Button, Motion};
+use rand;
+use rand::Rng;
 
 use states::States;
 use states::RenderMode;
@@ -98,6 +100,15 @@ mod gui {
 
     fn build_brush_panel(ui: &Ui, states: &mut States) {
         ui.color_edit4(im_str!("color"), &mut states.recording_stroke_anchors.color).build();
+        if ui.button(im_str!("random color"), ImVec2::new(0., 0.)) {
+            let mut rng = rand::thread_rng();
+            let rand_color = [rng.gen_range(0.0, 1.0),
+                              rng.gen_range(0.0, 1.0),
+                              rng.gen_range(0.0, 1.0),
+                              rng.gen_range(0.0, 1.0)];
+
+            states.recording_stroke_anchors.color = rand_color;
+        }
     }
 
     fn build_stroke_manipulation_panel(ui: &Ui, states: &mut States) {

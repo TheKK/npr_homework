@@ -8,6 +8,7 @@ extern crate imgui;
 extern crate interpolation;
 extern crate piston;
 extern crate vecmath;
+extern crate rand;
 
 mod toolkits;
 mod states;
@@ -573,7 +574,7 @@ impl App {
             let stroke_vector = vecmath::vec2_sub(*stroke_start_pos, prev_stroke_anchor.pos);
 
             // Copy canvas to wipe_tmp_tex.
-            canvas_surface.fill(&self.wipe_tmp_tex.as_surface(),
+            canvas_surface.fill(&wipe_tmp_surface,
                                 glium::uniforms::MagnifySamplerFilter::Nearest);
 
             // Do actual wipe opeartion.
@@ -582,6 +583,7 @@ impl App {
                       &self.wipe_program,
                       &uniform!{
                           current_tex: &self.wipe_tmp_tex,
+
                           stroke_start_pos: *stroke_start_pos,
                           stroke_vector: stroke_vector,
                       },
