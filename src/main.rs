@@ -35,6 +35,7 @@ use glium::Program;
 
 use states::StrokeAnchor;
 use states::RenderMode;
+use states::OneStroke;
 
 const OPENGL: OpenGL = OpenGL::V3_2;
 
@@ -98,12 +99,15 @@ struct App {
     capillary_tex: Texture2d,
     passive_layer_tex: Texture2d,
 
+    wipe_tmp_tex: Texture2d,
+
     final_program: Program,
     stroke_ink_quantity_program: Program,
     circle_program: Program,
     triangle_program: Program,
     black_n_white_brush_program: Program,
     watercolor_brush_program: Program,
+    wipe_program: Program,
 
     rust_logo: Texture,
     doge_image: Texture2d,
@@ -186,6 +190,11 @@ impl App {
                                                                           fs"),
                                                             None)
             .expect("failed to initialize textured shader");
+        let wipe_program = Program::from_source(&window,
+                                                &load_string("shaders/final.vs"),
+                                                &load_string("shaders/wipe.fs"),
+                                                None)
+            .expect("failed to initialize textured shader");
 
         let doge_image = load_texture(&window, include_bytes!("assets/doge.png"));
 
@@ -211,10 +220,13 @@ impl App {
             capillary_tex: Texture2d::empty(&window, w, h).unwrap(),
             passive_layer_tex: Texture2d::empty(&window, w, h).unwrap(),
 
+            wipe_tmp_tex: Texture2d::empty(&window, w, h).unwrap(),
+
             final_program: final_program,
             stroke_ink_quantity_program: stroke_ink_quantity_program,
             circle_program: circle_program,
             triangle_program: triangle_program,
+            wipe_program: wipe_program,
 
             rust_logo: rust_logo,
             doge_image: doge_image,
@@ -534,9 +546,49 @@ impl App {
                 prev_stroke_anchor = &stroke_anchor;
             }
 
+            // Wipe previous pigment on canvas according to current new stroke.
+            self.wipe_pigment_by_stroke(&self.stroke_outline_tex, stroke);
+
             // Blit new stroke onto previous canvas.
             self.draw_texture_on(&self.stroke_outline_tmp_tex,
                                  &mut self.stroke_outline_tex.as_surface());
+        }
+    }
+
+    fn wipe_pigment_by_stroke(&self, canvas: &Texture2d, stroke: &OneStroke) {
+        if stroke.anchors.is_empty() {
+            return;
+        }
+
+        let mut wipe_tmp_surface = self.wipe_tmp_tex.as_surface();
+        let mut canvas_surface = canvas.as_surface();
+
+        wipe_tmp_surface.clear_color(0.0, 0.0, 0.0, 0.0);
+
+        let mut stroke_anchors_iter = stroke.anchors.iter();
+        let mut prev_stroke_anchor = stroke_anchors_iter.next().unwrap();
+
+        for stroke_anchor in stroke_anchors_iter {
+            let stroke_start_pos = &prev_stroke_anchor.pos;
+            let stroke_vector = vecmath::vec2_sub(*stroke_start_pos, prev_stroke_anchor.pos);
+
+            // Copy canvas to wipe_tmp_tex.
+            canvas_surface.fill(&self.wipe_tmp_tex.as_surface(),
+                                glium::uniforms::MagnifySamplerFilter::Nearest);
+
+            // Do actual wipe opeartion.
+            canvas_surface.draw(&self.final_vertex_buffer,
+                      &NoIndices(PrimitiveType::TriangleStrip),
+                      &self.wipe_program,
+                      &uniform!{
+                          current_tex: &self.wipe_tmp_tex,
+                          stroke_start_pos: *stroke_start_pos,
+                          stroke_vector: stroke_vector,
+                      },
+                      &DrawParameters::default())
+                .expect("failed to draw triangle list");
+
+            prev_stroke_anchor = stroke_anchor;
         }
     }
 
