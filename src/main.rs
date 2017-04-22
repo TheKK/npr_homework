@@ -453,7 +453,7 @@ impl App {
             .map(|v| {
                 Vertex {
                     pos: [2.0 * v.pos[0] / width as f32 - 1.0,
-                          2.0 * v.pos[1] / height as f32 - 1.0],
+                          2.0 * (900.0 - v.pos[1]) / height as f32 - 1.0],
                 }
             })
             .collect();

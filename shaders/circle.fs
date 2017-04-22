@@ -8,6 +8,7 @@ uniform vec4 brush_color;
 
 void main() {
     vec2 pos = gl_FragCoord.xy;
+    pos.y = 900 - pos.y;
 
     float dist = distance(pos, center);
 
