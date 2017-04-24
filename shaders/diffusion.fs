@@ -8,6 +8,8 @@ out vec4 o_color;
 
 uniform sampler2D current_tex;
 
+uniform vec4 brush_color;
+
 uniform vec2 stroke_start_pos;
 uniform vec2 stroke_end_pos;
 
@@ -65,17 +67,11 @@ bool is_in_area_b(vec2 pos,
     vec2 end_to_pos_v = pos - end_pos;
 
     return
-        (
-cross2d(upper_line_v, start_upper_to_pos_v) > 0.0) &&
+        (cross2d(upper_line_v, start_upper_to_pos_v) > 0.0) &&
         (cross2d(lower_line_v, start_lower_to_pos_v) < 0.0) &&
 
         (cross2d(start_to_end_n_norm, start_to_pos_v) > 0.0) &&
         (cross2d(start_to_end_n_norm, end_to_pos_v) < 0.0);
-}
-
-vec4
-blend(vec4 base, vec4 blend) {
-    return vec4(base.rgb * base.a + blend.rgb * blend.a, 1.0);
 }
 
 bool
@@ -104,65 +100,11 @@ main() {
     vec2 pos = gl_FragCoord.xy;
     vec4 old_pigment = texture(current_tex, v_tex_coords);
 
-    if (!is_in_stroke(pos)) {
-        // if (old_pigment.a == 0) {
-            // discard;
-        // } else {
-            o_color = old_pigment;
-            return;
-        // }
-    }
+    if (is_in_stroke(pos)) {
+        o_color = vec4((brush_color * old_pigment).rgb, brush_color.a);
+        return;
 
-    vec2 stroke_vector = stroke_end_pos - stroke_start_pos;
-    vec2 start_to_end_v_norm = normalize(stroke_vector);
-
-    float alpha = 1;
-    float beta = 120;
-    vec2 wipe_vector = start_to_end_v_norm * min(beta, length(stroke_vector)) * alpha;
-    float wipe_dist = length(wipe_vector);
-
-    vec2 a, b;
-    if (-wipe_vector.x >= 0) {
-        a = pos;
-        b = pos - wipe_vector;
     } else {
-        a = pos - wipe_vector;
-        b = pos;
+        o_color = old_pigment;
     }
-
-    int y_step;
-    if (b.y > a.y) {
-        y_step = 1;
-    } else {
-        y_step = -1;
-    }
-
-    float dx = b.x - a.x;
-    float dy = b.y - a.y;
-    float derror = abs(dy / dx);
-
-    float error = derror - 0.5;
-
-    vec4 sum = vec4(0.0);
-
-    int y = int(round(pos.y));
-    for (int x = int(round(a.x)); x < int(round(b.x)); ++x) {
-        vec2 wipe_pos = vec2(x, y);
-        vec2 wipe_uv = wipe_pos / 900;
-
-        float dist = distance(pos, wipe_pos);
-
-        vec4 wiped_pigment = texture(current_tex, wipe_uv);
-        wiped_pigment /= (dist);
-
-        sum += wiped_pigment;
-
-        error += derror;
-        if (error >= 0.5) {
-            y += y_step;
-            error -= 1;
-        }
-    }
-
-    o_color = old_pigment * vec4(sum.rgb, 1.0);
 }

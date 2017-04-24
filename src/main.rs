@@ -101,6 +101,7 @@ struct App {
     passive_layer_tex: Texture2d,
 
     wipe_tmp_tex: Texture2d,
+    diffusion_tmp_tex: Texture2d,
 
     final_program: Program,
     stroke_ink_quantity_program: Program,
@@ -109,6 +110,7 @@ struct App {
     black_n_white_brush_program: Program,
     watercolor_brush_program: Program,
     wipe_program: Program,
+    diffusion_program: Program,
 
     rust_logo: Texture,
     doge_image: Texture2d,
@@ -196,6 +198,11 @@ impl App {
                                                 &load_string("shaders/wipe.fs"),
                                                 None)
             .expect("failed to initialize textured shader");
+        let diffusion_program = Program::from_source(&window,
+                                                     &load_string("shaders/final.vs"),
+                                                     &load_string("shaders/diffusion.fs"),
+                                                     None)
+            .expect("failed to initialize textured shader");
 
         let doge_image = load_texture(&window, include_bytes!("assets/doge.png"));
 
@@ -222,12 +229,14 @@ impl App {
             passive_layer_tex: Texture2d::empty(&window, w, h).unwrap(),
 
             wipe_tmp_tex: Texture2d::empty(&window, w, h).unwrap(),
+            diffusion_tmp_tex: Texture2d::empty(&window, w, h).unwrap(),
 
             final_program: final_program,
             stroke_ink_quantity_program: stroke_ink_quantity_program,
             circle_program: circle_program,
             triangle_program: triangle_program,
             wipe_program: wipe_program,
+            diffusion_program: diffusion_program,
 
             rust_logo: rust_logo,
             doge_image: doge_image,
@@ -504,7 +513,7 @@ impl App {
     }
 
     fn render_stroke_ink_outline_tex(&self) {
-        self.stroke_outline_tex.as_surface().clear_color(0.0, 0.0, 0.0, 0.0);
+        self.stroke_outline_tex.as_surface().clear_color(1.0, 1.0, 1.0, 1.0);
 
         let render_circle_part = |stroke_anchor: &StrokeAnchor, stroke_color| {
             let radius = self.caculate_brush_radius(stroke_anchor.pressure);
@@ -550,10 +559,81 @@ impl App {
             // Wipe previous pigment on canvas according to current new stroke.
             self.wipe_pigment_by_stroke(&self.stroke_outline_tex, stroke);
 
+            // Fake diffusion on canvas according to current new stroke.
+            self.render_fake_stroke_diffusion(&self.stroke_outline_tex, stroke);
+
             // Blit new stroke onto previous canvas.
             self.draw_texture_on(&self.stroke_outline_tmp_tex,
                                  &mut self.stroke_outline_tex.as_surface());
         }
+    }
+
+    fn render_fake_stroke_diffusion(&self, canvas: &Texture2d, stroke: &OneStroke) {
+        if stroke.anchors.is_empty() {
+            return;
+        }
+
+        let mut canvas_surface = canvas.as_surface();
+        let mut diffusion_tmp_surface = self.diffusion_tmp_tex.as_surface();
+
+        let mut haha = |brush_color, radius_offset| {
+            let mut stroke_anchors_iter = stroke.anchors.iter();
+            let mut prev_stroke_anchor = stroke_anchors_iter.next().unwrap();
+
+            diffusion_tmp_surface.clear_color(0.0, 0.0, 0.0, 0.0);
+
+            for stroke_anchor in stroke_anchors_iter {
+                let stroke_start_pos = &prev_stroke_anchor.pos;
+                let stroke_end_pos = &stroke_anchor.pos;
+
+                let start_radius = self.caculate_brush_radius(prev_stroke_anchor.pressure);
+                let end_radius = self.caculate_brush_radius(stroke_anchor.pressure);
+
+                canvas_surface.fill(&diffusion_tmp_surface,
+                                    glium::uniforms::MagnifySamplerFilter::Nearest);
+
+                canvas_surface.draw(&self.final_vertex_buffer,
+                          &NoIndices(PrimitiveType::TriangleStrip),
+                          &self.diffusion_program,
+                          &uniform!{
+                              current_tex: &self.diffusion_tmp_tex,
+
+                              brush_color: brush_color,
+
+                              stroke_start_pos: *stroke_start_pos,
+                              stroke_end_pos: *stroke_end_pos,
+
+                              start_radius: start_radius + radius_offset,
+                              end_radius: end_radius + radius_offset,
+                          },
+                          &DrawParameters::default())
+                    .expect("failed to draw triangle list");
+
+                prev_stroke_anchor = stroke_anchor;
+            }
+        };
+
+        let inner_brush_color = {
+            let mut c = stroke.color;
+
+            c[0] *= 0.7;
+            c[1] *= 0.7;
+            c[2] *= 0.7;
+
+            c
+        };
+        let outter_brush_color = {
+            let mut c = stroke.color;
+
+            c[0] *= 1.3;
+            c[1] *= 1.3;
+            c[2] *= 1.3;
+
+            c
+        };
+
+        haha(outter_brush_color, 10.0);
+        haha(inner_brush_color, 2.5);
     }
 
     fn wipe_pigment_by_stroke(&self, canvas: &Texture2d, stroke: &OneStroke) {
@@ -571,7 +651,10 @@ impl App {
 
         for stroke_anchor in stroke_anchors_iter {
             let stroke_start_pos = &prev_stroke_anchor.pos;
-            let stroke_vector = vecmath::vec2_sub(*stroke_start_pos, prev_stroke_anchor.pos);
+            let stroke_end_pos = &stroke_anchor.pos;
+
+            let start_radius = self.caculate_brush_radius(prev_stroke_anchor.pressure);
+            let end_radius = self.caculate_brush_radius(stroke_anchor.pressure);
 
             // Copy canvas to wipe_tmp_tex.
             canvas_surface.fill(&wipe_tmp_surface,
@@ -585,7 +668,10 @@ impl App {
                           current_tex: &self.wipe_tmp_tex,
 
                           stroke_start_pos: *stroke_start_pos,
-                          stroke_vector: stroke_vector,
+                          stroke_end_pos: *stroke_end_pos,
+
+                          start_radius: start_radius,
+                          end_radius: end_radius,
                       },
                       &DrawParameters::default())
                 .expect("failed to draw triangle list");
